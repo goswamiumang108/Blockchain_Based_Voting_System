@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/*
+!data/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+tag_secret.key
+.streamlit/secrets.toml
