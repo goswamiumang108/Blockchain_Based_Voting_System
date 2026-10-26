@@ -10,3 +10,4 @@ data/*
 *.db-shm
 tag_secret.key
 .streamlit/secrets.toml
+Documentation/Synopsis/Synopsis Blockchain_based_votting_system goswamiumang108.docx
