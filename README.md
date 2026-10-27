@@ -4,9 +4,9 @@
 
 ---
 
-An Blockchain based voting system with a **custom blockchain written from scratch** (SHA-256, Proof of Work),
-SQLite persistence, bcrypt-hashed accounts and a Streamlit interface.
+VoteChain is a web-based voting system built with Python, Streamlit and SQLite. Voters register and sign in with bcrypt-protected passwords, while an administrator creates elections, adds candidates, enrolls eligible voters, and opens and closes voting. Each ballot is checked on the server before it is accepted. A single database transaction confirms that the election is open, the voter is on the roll and has not voted, and that the candidate belongs to the election. Database constraints back these checks up. The ballot that is stored carries only the chosen candidate, a random receipt ID and a keyed voter tag, so voter identity is kept apart from ballot data.
 
+Accepted ballots are sealed into blocks on a blockchain written from scratch. Each block holds an index, timestamp, transactions, the previous block’s hash, a nonce and its own SHA-256 hash, and mining uses a Proof of Work with a configurable difficulty. A blockchain explorer verifies the full chain on demand and lets a voter confirm their ballot using the receipt ID. Election results are computed only from validated ballots in verified blocks, so an altered block is detected and excluded from the count. All data is stored in SQLite, so it persists across restarts, and the app can be deployed on Streamlit Community Cloud or any Python host.
 ## Features
 
 | Area        | What is implemented                                                                                                                                                     |
