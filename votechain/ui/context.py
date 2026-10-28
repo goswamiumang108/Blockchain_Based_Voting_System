@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
-
 import streamlit as st
+from typing import Optional
 
 from ..config import Settings
 from ..models import User

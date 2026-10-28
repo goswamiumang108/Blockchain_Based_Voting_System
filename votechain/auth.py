@@ -1,12 +1,11 @@
 """Voter registration and secure login (bcrypt password hashing, lockout on repeated failures)."""
 from __future__ import annotations
 
+import bcrypt
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-
-import bcrypt
 
 from .database import Database
 from .errors import AccountLockedError, AuthenticationError, ValidationError

@@ -175,7 +175,7 @@ class VotingService:
 				raise ElectionStateError("Only a draft election can be opened.")
 			n_cand = conn.execute("SELECT COUNT(*) FROM candidates WHERE election_id = ?", (election_id,)).fetchone()[0]
 			n_elig = \
-			conn.execute("SELECT COUNT(*) FROM eligible_voters WHERE election_id = ?", (election_id,)).fetchone()[0]
+				conn.execute("SELECT COUNT(*) FROM eligible_voters WHERE election_id = ?", (election_id,)).fetchone()[0]
 			if n_cand < 2:
 				raise ElectionStateError("At least two candidates are required to open an election.")
 			if n_elig < 1:

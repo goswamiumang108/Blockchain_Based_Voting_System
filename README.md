@@ -4,14 +4,24 @@
 
 ---
 
-VoteChain is a blockchain-based voting system built with Python, Streamlit and SQLite. Voters register and sign in with bcrypt-protected passwords, while an administrator creates elections, adds candidates, enrolls eligible voters, and opens and closes voting. Each ballot is checked on the server before it is accepted. A single database transaction confirms that the election is open, the voter is on the roll and has not voted, and that the candidate belongs to the election. Database constraints back these checks up. The ballot that is stored carries only the chosen candidate, a random receipt ID and a keyed voter tag, so voter identity is kept apart from ballot data.
+VoteChain is a blockchain-based voting system built with Python, Streamlit and SQLite. Voters register and sign in with
+bcrypt-protected passwords, while an administrator creates elections, adds candidates, enrolls eligible voters, and
+opens and closes voting. Each ballot is checked on the server before it is accepted. A single database transaction
+confirms that the election is open, the voter is on the roll and has not voted, and that the candidate belongs to the
+election. Database constraints back these checks up. The ballot that is stored carries only the chosen candidate, a
+random receipt ID and a keyed voter tag, so voter identity is kept apart from ballot data.
 
-Accepted ballots are sealed into blocks on a blockchain written from scratch. Each block holds an index, timestamp, transactions, the previous block’s hash, a nonce and its own SHA-256 hash, and mining uses a Proof of Work with a configurable difficulty. A blockchain explorer verifies the full chain on demand and lets a voter confirm their ballot using the receipt ID. Election results are computed only from validated ballots in verified blocks, so an altered block is detected and excluded from the count. All data is stored in SQLite, so it persists across restarts, and the app can be deployed on Streamlit Community Cloud or any Python host.
+Accepted ballots are sealed into blocks on a blockchain written from scratch. Each block holds an index, timestamp,
+transactions, the previous block’s hash, a nonce and its own SHA-256 hash, and mining uses a Proof of Work with a
+configurable difficulty. A blockchain explorer verifies the full chain on demand and lets a voter confirm their ballot
+using the receipt ID. Election results are computed only from validated ballots in verified blocks, so an altered block
+is detected and excluded from the count. All data is stored in SQLite, so it persists across restarts, and the app can
+be deployed on Streamlit Community Cloud or any Python host.
 
 ## Features
 
-| Area        | What is implemented                                                                                                                                                     |
-|-------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Area            | What is implemented                                                                                                                                                     |
+|-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Accounts**    | Self-registration (voters only), bcrypt password hashes, input validation, 5-strike lockout, generic login errors                                                       |
 | **Admin**       | Create elections, manage candidates, enroll voters, open/close elections, manual mining. Admin accounts can only be created by the operator (env vars or CLI)           |
 | **Voting**      | One vote per voter per election, enforced by SQLite PK/FK/triggers inside a `BEGIN IMMEDIATE` transaction                                                               |
@@ -142,12 +152,14 @@ git push -u origin main
 
 1. Go to <https://share.streamlit.io> → **Create app** → pick the repo, branch `main`, main file `app.py`.
 2. **Advanced settings**: choose Python 3.12 and paste your **Secrets** (see below).
+
 ```toml
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "a-long-unique-password"
 VOTECHAIN_TAG_SECRET = "64-random-hex-characters"   # python -c "import secrets; print(secrets.token_hex(32))"
 VOTECHAIN_DIFFICULTY = "3"
 ```
+
 3. Click **Deploy**. Every later `git push` to `main` redeploys the app.
 
 > **Storage is ephemeral on Community Cloud.** The container filesystem is reset when the app is rebuilt, rebooted,

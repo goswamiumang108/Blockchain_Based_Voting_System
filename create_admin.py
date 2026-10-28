@@ -26,7 +26,6 @@ You will be asked for the password twice; it is not shown as you type. The accou
 default data/votechain.db), so the app must be pointed at the same database for the new admin to be able to sign in.
 """
 
-
 from __future__ import annotations
 
 import argparse

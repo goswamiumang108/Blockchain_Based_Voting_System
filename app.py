@@ -1,5 +1,6 @@
 """VoteChain: Streamlit entry point.   Run with:  streamlit run app.py"""
 import streamlit as st
+import sys
 
 st.set_page_config(page_title="VoteChain", page_icon="🗳️", layout="wide")
 
@@ -13,13 +14,12 @@ except Exception as exc:  # misconfiguration (e.g. weak ADMIN_PASSWORD) should b
 	st.error(f"Application failed to start: {exc}")
 	st.stop()
 
+PRODUCT_NAME = "VoteChain: Blockchain based Voting System"
+
 user = context.current_user()
 
 if user is None:
-	navigation = st.navigation(
-		[st.Page(pages.account_page, title="Sign in", icon="🔐", url_path="signin", default=True)],
-		position="sidebar",
-	)
+	nav_pages = [st.Page(pages.account_page, title="Sign in", icon="🔐", url_path="signin", default=True)]
 else:
 	nav_pages = [
 		st.Page(pages.vote_page, title="Vote", icon="🗳️", url_path="vote", default=True),
@@ -28,12 +28,19 @@ else:
 	]
 	if user.is_admin:
 		nav_pages.append(st.Page(pages.admin_page, title="Admin", icon="🛠️", url_path="admin"))
-	navigation = st.navigation(nav_pages)
-	with st.sidebar:
+
+# Streamlit's built-in page list is hidden so the sidebar can start with the product name on every page.
+navigation = st.navigation(nav_pages, position="hidden")
+
+with st.sidebar:
+	st.markdown(f"### {PRODUCT_NAME}")
+	for nav_page in nav_pages:
+		st.page_link(nav_page)
+	if user is not None:
+		st.divider()
 		st.markdown(f"Signed in as **{user.full_name}**  \n`@{user.username}` · {user.role}")
 		if st.button("Sign out"):
 			context.logout()
 			st.rerun()
-		st.caption("Demo only: single-process chain, not a production election system.")
 
 navigation.run()

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-
 import pandas as pd
 import streamlit as st
 
@@ -10,8 +9,7 @@ from . import context
 from ..errors import AuthenticationError, VoteChainError
 
 DISCLAIMER = (
-	"Educational demo: this chain lives in one process and one SQLite file, so it is **not** a "
-	"decentralized network and this is **not** a production-secure election system."
+	""
 )
 
 
@@ -25,8 +23,7 @@ STATUS_ICON = {"draft": "📝 draft", "open": "🟢 open", "closed": "🔒 close
 # ---------------------------------------------------------------------------------- account
 def account_page() -> None:
 	services = context.get_services()
-	st.title("🗳️ VoteChain")
-	st.caption(DISCLAIMER)
+	st.title("🗳️ VoteChain: Blockchain based Voting System")
 	context.show_flashes()
 	tab_login, tab_register = st.tabs(["Sign in", "Register as a voter"])
 	
