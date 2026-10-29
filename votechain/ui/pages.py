@@ -11,10 +11,6 @@ from ..blockchain import utc_now_iso
 from ..exports import results_filename, results_to_csv
 from ..errors import AuthenticationError, VoteChainError
 
-DISCLAIMER = (
-	""
-)
-
 
 def _short(h: str, n: int = 12) -> str:
 	return f"{h[:n]}…" if h and len(h) > n else h
@@ -187,7 +183,6 @@ def explorer_page() -> None:
 	services = context.get_services()
 	voting = services.voting
 	st.title("⛓️ Blockchain Explorer")
-	st.caption(DISCLAIMER)
 	
 	blocks = voting.get_blocks()
 	audit = voting.audit_transactions()

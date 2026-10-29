@@ -189,16 +189,14 @@ What it does:
   results.
 - The service refuses to extend a chain that fails verification.
 
-What it does **not** do (do not present it as more than it is):
+**Limitations** that **will be resolved in future upgrades**:
 
 - **Not decentralized.** One process, one database, one operator. There are no peers, consensus or network. An attacker
   (or operator) with write access to the DB *and* the code can rewrite the whole chain and re-mine it. Low-difficulty
-  PoW
-  gives no meaningful protection here. Real tamper-resistance would need independent replicas/validators or periodic
+  PoW gives no meaningful protection here. Real tamper-resistance would need independent replicas/validators or periodic
   anchoring
   of block hashes to an external system.
 - **Not a secret-ballot guarantee.** See the caveat above; there is no blind-signature or zero-knowledge scheme.
 - **Not hardened for real elections.** No voter identity proofing, no TLS termination, no persistent sessions,
   no CSRF/rate-limiting beyond Streamlit defaults and the login lockout, no coercion resistance, no independent audit.
   Don't use it for binding votes.
-- Sessions are per browser tab (Streamlit session state); a page refresh signs the user out.
