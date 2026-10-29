@@ -28,6 +28,9 @@ be deployed on Streamlit Community Cloud or any Python host.
 | **Blockchain**  | `Block` = index, timestamp, transactions, previous_hash, nonce, hash (+ `difficulty` target). Configurable PoW. Verification of genesis, indices, links, hashes and PoW |
 | **Explorer**    | Live integrity verification, block table and details, ballot-receipt lookup, pending pool, JSON export                                                                  |
 | **Results**     | Counted **only** from validated, accepted on-chain ballots, with an audit panel                                                                                         |
+| **NOTA**        | Optional "None of the above" ballot option per election (admin toggle while the election is a draft). It is an ordinary candidate row, so a NOTA vote follows the same validation and on-chain path; if NOTA gets the most votes, no candidate is declared elected |
+| **CSV export**  | Download any election's results as CSV: counts, shares, turnout, outcome, and the chain height and head hash at export time. Spreadsheet formula injection is neutralised |
+| **Audit log**   | Admin-only, hash-linked log of every administrative action and admin sign-in, written in the same transaction as the action. Edits or deletions are detected. Votes are never logged |
 | **Persistence** | Everything (users, elections, roll, participation, pending ballots, blocks) is stored in SQLite                                                                         |
 
 ## Architecture
@@ -39,6 +42,8 @@ votechain/
   database.py             SQLite schema, constraints, triggers, transaction helper, block persistence
   auth.py                 Registration, bcrypt login, lockout
   voting.py               Elections, atomic cast_vote, mining, transaction validation, tallying
+  auditlog.py             Hash-linked admin audit log (write, list, verify)
+  exports.py              CSV export of election results (pure functions)
   services.py             Composition root (builds the services from Settings)
   config.py / models.py / errors.py
   ui/context.py           Cached services, session helpers (session carries only a user id)
@@ -116,6 +121,8 @@ streamlit run app.py                 # opens http://localhost:8501
 ```
 
 Sign in with the `ADMIN_USERNAME` / `ADMIN_PASSWORD` from your secrets file.
+
+An existing database is upgraded automatically on start (new columns for NOTA and the audit-log table). No data is changed or lost, and earlier elections simply have NOTA switched off.
 Press `Ctrl+C` to stop. Next time, re-activate the environment (`source .venv/bin/activate`)
 and run `streamlit run app.py` again; the data in `data/` persists.
 

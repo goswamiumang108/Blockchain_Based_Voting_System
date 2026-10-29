@@ -18,13 +18,14 @@ from .blockchain import (
 	Block, Blockchain, ChainVerification, mine_block, verify_chain,
 )
 from .blockchain import create_genesis_block
+from . import auditlog
 from .database import Database, insert_block, load_blocks
 from .errors import (
 	AlreadyVotedError, ChainIntegrityError, ElectionStateError, InvalidCandidateError,
 	NotEligibleError, PermissionDeniedError, ValidationError, VoteChainError,
 )
 from .models import (
-	AcceptedVote, Candidate, Election, ElectionResults, RejectedVote, TransactionAudit, User, VoteReceipt,
+	AcceptedVote, Candidate, Election, ElectionResults, NOTA_NAME, RejectedVote, TransactionAudit, User, VoteReceipt,
 )
 
 log = logging.getLogger(__name__)
@@ -40,11 +41,11 @@ def _now() -> str:
 
 def _election(row: sqlite3.Row) -> Election:
 	return Election(row["id"], row["title"], row["description"], row["status"],
-	                row["created_at"], row["opened_at"], row["closed_at"])
+	                row["created_at"], row["opened_at"], row["closed_at"], bool(row["allow_nota"]))
 
 
 def _candidate(row: sqlite3.Row) -> Candidate:
-	return Candidate(row["id"], row["election_id"], row["name"], row["description"])
+	return Candidate(row["id"], row["election_id"], row["name"], row["description"], bool(row["is_nota"]))
 
 
 class VotingService:
@@ -93,7 +94,8 @@ class VotingService:
 		return row
 	
 	# ---------------------------------------------------------------- elections (admin)
-	def create_election(self, actor_id: int, title: str, description: str = "") -> Election:
+	def create_election(self, actor_id: int, title: str, description: str = "",
+						allow_nota: bool = False) -> Election:
 		title, description = (title or "").strip(), (description or "").strip()
 		if not 3 <= len(title) <= 120:
 			raise ValidationError("Election title must be 3-120 characters.")
@@ -103,12 +105,46 @@ class VotingService:
 				"INSERT INTO elections (title, description, created_by, created_at) VALUES (?,?,?,?)",
 				(title, description, actor_id, _now()),
 			)
-			return _election(self._election_row(conn, cur.lastrowid))
+			election_id = cur.lastrowid
+			if allow_nota:
+				self._apply_nota(conn, election_id, True)
+			auditlog.write(conn, actor_id, "election_created", election_id,
+						   f'title="{title}", NOTA option: {"yes" if allow_nota else "no"}')
+			return _election(self._election_row(conn, election_id))
+
+	@staticmethod
+	def _apply_nota(conn: sqlite3.Connection, election_id: int, enabled: bool) -> None:
+		"""Add or remove the election's single 'None of the above' candidate (draft elections only;
+		the database triggers enforce that). NOTA is an ordinary candidate row flagged is_nota, so a
+		NOTA ballot goes through exactly the same validation and on-chain path as any other vote."""
+		exists = conn.execute("SELECT 1 FROM candidates WHERE election_id = ? AND is_nota = 1",
+							  (election_id,)).fetchone() is not None
+		try:
+			if enabled and not exists:
+				conn.execute("INSERT INTO candidates (election_id, name, description, is_nota) VALUES (?,?,?,1)",
+							 (election_id, NOTA_NAME, "Records a vote for no candidate"))
+			elif not enabled and exists:
+				conn.execute("DELETE FROM candidates WHERE election_id = ? AND is_nota = 1", (election_id,))
+		except sqlite3.IntegrityError:
+			raise ValidationError("A candidate already uses the reserved NOTA name.") from None
+		conn.execute("UPDATE elections SET allow_nota = ? WHERE id = ?", (1 if enabled else 0, election_id))
+
+	def set_nota(self, actor_id: int, election_id: int, enabled: bool) -> Election:
+		"""Turn the 'None of the above' ballot option on or off (draft elections only)."""
+		with self.db.transaction() as conn:
+			self._require_admin(conn, actor_id)
+			if self._election_row(conn, election_id)["status"] != "draft":
+				raise ElectionStateError("The NOTA option can only be changed while the election is a draft.")
+			self._apply_nota(conn, election_id, bool(enabled))
+			auditlog.write(conn, actor_id, "nota_enabled" if enabled else "nota_disabled", election_id)
+			return _election(self._election_row(conn, election_id))
 	
 	def add_candidate(self, actor_id: int, election_id: int, name: str, description: str = "") -> Candidate:
 		name, description = (name or "").strip(), (description or "").strip()
 		if not 1 <= len(name) <= 100:
 			raise ValidationError("Candidate name is required (max 100 characters).")
+		if name.casefold() == NOTA_NAME.casefold():
+			raise ValidationError("That name is reserved for the NOTA option; use the NOTA setting instead.")
 		try:
 			with self.db.transaction() as conn:
 				self._require_admin(conn, actor_id)
@@ -119,6 +155,7 @@ class VotingService:
 					"INSERT INTO candidates (election_id, name, description) VALUES (?,?,?)",
 					(election_id, name, description),
 				)
+				auditlog.write(conn, actor_id, "candidate_added", election_id, f'name="{name}"')
 				return Candidate(cur.lastrowid, election_id, name, description)
 		except sqlite3.IntegrityError:
 			raise ValidationError("A candidate with that name already exists in this election.") from None
@@ -127,12 +164,16 @@ class VotingService:
 		try:
 			with self.db.transaction() as conn:
 				self._require_admin(conn, actor_id)
-				row = conn.execute("SELECT election_id FROM candidates WHERE id = ?", (candidate_id,)).fetchone()
+				row = conn.execute("SELECT election_id, name, is_nota FROM candidates WHERE id = ?",
+								   (candidate_id,)).fetchone()
 				if row is None:
 					raise ValidationError("Candidate not found.")
+				if row["is_nota"]:
+					raise ValidationError("Use the NOTA setting to remove the 'None of the above' option.")
 				if self._election_row(conn, row["election_id"])["status"] != "draft":
 					raise ElectionStateError("Candidates can only be changed while the election is a draft.")
 				conn.execute("DELETE FROM candidates WHERE id = ?", (candidate_id,))
+				auditlog.write(conn, actor_id, "candidate_removed", row["election_id"], f'name="{row["name"]}"')
 		except sqlite3.IntegrityError as exc:
 			raise ElectionStateError(f"Candidate cannot be removed: {exc}") from None
 	
@@ -149,6 +190,8 @@ class VotingService:
 				cur = conn.execute(
 					"INSERT OR IGNORE INTO eligible_voters (election_id, user_id) VALUES (?,?)", (election_id, uid))
 				added += cur.rowcount
+			if added:
+				auditlog.write(conn, actor_id, "voters_enrolled", election_id, f"{added} voter(s) added to the roll")
 		return added
 	
 	def enroll_all_voters(self, actor_id: int, election_id: int) -> int:
@@ -164,6 +207,8 @@ class VotingService:
 					raise ElectionStateError("The voter roll is frozen once the election is open.")
 				conn.execute("DELETE FROM eligible_voters WHERE election_id = ? AND user_id = ?",
 				             (election_id, user_id))
+				who = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+				auditlog.write(conn, actor_id, "voter_removed", election_id, f"username={who[0] if who else user_id}")
 		except sqlite3.IntegrityError as exc:
 			raise ElectionStateError(f"Voter cannot be removed: {exc}") from None
 	
@@ -173,14 +218,16 @@ class VotingService:
 			election = self._election_row(conn, election_id)
 			if election["status"] != "draft":
 				raise ElectionStateError("Only a draft election can be opened.")
-			n_cand = conn.execute("SELECT COUNT(*) FROM candidates WHERE election_id = ?", (election_id,)).fetchone()[0]
+			n_cand = conn.execute("SELECT COUNT(*) FROM candidates WHERE election_id = ? AND is_nota = 0",
+								(election_id,)).fetchone()[0]
 			n_elig = \
 				conn.execute("SELECT COUNT(*) FROM eligible_voters WHERE election_id = ?", (election_id,)).fetchone()[0]
 			if n_cand < 2:
-				raise ElectionStateError("At least two candidates are required to open an election.")
+				raise ElectionStateError("At least two candidates (not counting NOTA) are required to open an election.")
 			if n_elig < 1:
 				raise ElectionStateError("Enroll at least one eligible voter before opening the election.")
 			conn.execute("UPDATE elections SET status = 'open', opened_at = ? WHERE id = ?", (_now(), election_id))
+			auditlog.write(conn, actor_id, "election_opened", election_id)
 			return _election(self._election_row(conn, election_id))
 	
 	def close_election(self, actor_id: int, election_id: int) -> Election:
@@ -190,6 +237,7 @@ class VotingService:
 			if self._election_row(conn, election_id)["status"] != "open":
 				raise ElectionStateError("Only an open election can be closed.")
 			conn.execute("UPDATE elections SET status = 'closed', closed_at = ? WHERE id = ?", (_now(), election_id))
+			auditlog.write(conn, actor_id, "election_closed", election_id)
 		self.mine_pending()
 		return self.get_election(election_id)
 	
@@ -205,7 +253,7 @@ class VotingService:
 	def list_candidates(self, election_id: int) -> list[Candidate]:
 		with self.db.connection() as conn:
 			return [_candidate(r) for r in conn.execute(
-				"SELECT * FROM candidates WHERE election_id = ? ORDER BY name COLLATE NOCASE", (election_id,))]
+				"SELECT * FROM candidates WHERE election_id = ? ORDER BY is_nota, name COLLATE NOCASE", (election_id,))]
 	
 	def list_eligible(self, election_id: int) -> list[User]:
 		with self.db.connection() as conn:
@@ -285,14 +333,26 @@ class VotingService:
 		return VoteReceipt(election_id, ballot_id, block_index)
 	
 	# ---------------------------------------------------------------- mining
-	def mine_pending(self) -> list[Block]:
-		"""Mine all pending ballots into one or more blocks. Safe to call concurrently."""
+	def mine_pending(self, actor_id: Optional[int] = None) -> list[Block]:
+		"""Mine all pending ballots into one or more blocks. Safe to call concurrently.
+
+		Pass ``actor_id`` when an administrator triggers it by hand: the actor must be an admin and
+		the action is written to the audit log. Automatic mining (after a vote, on closing) passes none.
+		"""
+		if actor_id is not None:
+			with self.db.connection() as conn:
+				self._require_admin(conn, actor_id)
 		mined: list[Block] = []
 		while True:
 			block = self._mine_one_block()
 			if block is None:
-				return mined
+				break
 			mined.append(block)
+		if actor_id is not None and mined:
+			with self.db.transaction() as conn:
+				ballots = sum(len(b.transactions) for b in mined)
+				auditlog.write(conn, actor_id, "ballots_mined", None, f"{len(mined)} block(s), {ballots} ballot(s)")
+		return mined
 	
 	def _mine_one_block(self) -> Optional[Block]:
 		with self.db.transaction() as conn:  # write lock held: nobody else can extend the chain meanwhile
@@ -317,6 +377,18 @@ class VotingService:
 			             [r["id"] for r in rows])
 			return block
 	
+	# ---------------------------------------------------------------- audit log (admin only)
+	def list_audit_log(self, actor_id: int, limit: int = 200, action: Optional[str] = None,
+					   election_id: Optional[int] = None) -> list[auditlog.AuditEntry]:
+		with self.db.connection() as conn:
+			self._require_admin(conn, actor_id)
+			return auditlog.list_entries(conn, limit, action, election_id)
+
+	def verify_audit_log(self, actor_id: int) -> tuple[bool, list[str]]:
+		with self.db.connection() as conn:
+			self._require_admin(conn, actor_id)
+			return auditlog.verify(conn)
+
 	# ---------------------------------------------------------------- chain access
 	def get_blocks(self) -> list[Block]:
 		with self.db.connection() as conn:

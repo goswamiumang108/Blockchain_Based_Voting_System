@@ -18,7 +18,7 @@ from typing import Iterator, Optional
 
 from .blockchain import Block, canonical_json
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
          CREATE TABLE IF NOT EXISTS users
@@ -352,6 +352,44 @@ BEFORE
          """
 
 
+# Additions to the original schema. Applied on every start, so existing databases are upgraded in place.
+EXTENSIONS_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_nota_per_election
+	ON candidates (election_id) WHERE is_nota = 1;
+
+CREATE TABLE IF NOT EXISTS audit_log (
+	id             INTEGER PRIMARY KEY AUTOINCREMENT,
+	timestamp      TEXT NOT NULL,
+	actor_id       INTEGER,
+	actor_username TEXT,
+	action         TEXT NOT NULL,
+	election_id    INTEGER,
+	details        TEXT NOT NULL DEFAULT '',
+	prev_hash      TEXT NOT NULL,
+	entry_hash     TEXT NOT NULL UNIQUE
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_audit_no_update
+BEFORE UPDATE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit log entries are immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS trg_audit_no_delete
+BEFORE DELETE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit log entries are immutable'); END;
+"""
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+	"""Add a column to an existing table if it is missing (idempotent, safe if two processes race)."""
+	if column in {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}:
+		return
+	try:
+		conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+	except sqlite3.OperationalError as exc:
+		if "duplicate column" not in str(exc).lower():
+			raise
+
+
 class Database:
 	"""Thin wrapper that hands out short-lived connections (safe across Streamlit threads)."""
 	
@@ -399,6 +437,9 @@ class Database:
 	def init_schema(self) -> None:
 		with self.connection() as conn:
 			conn.executescript(SCHEMA)
+			_ensure_column(conn, "elections", "allow_nota", "INTEGER NOT NULL DEFAULT 0 CHECK (allow_nota IN (0, 1))")
+			_ensure_column(conn, "candidates", "is_nota", "INTEGER NOT NULL DEFAULT 0 CHECK (is_nota IN (0, 1))")
+			conn.executescript(EXTENSIONS_SQL)
 			conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

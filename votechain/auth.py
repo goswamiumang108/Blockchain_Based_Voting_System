@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from . import auditlog
 from .database import Database
 from .errors import AccountLockedError, AuthenticationError, ValidationError
 from .models import User
@@ -62,6 +63,8 @@ class AuthService:
 					(username, full_name, pw_hash, role, _iso(_now())),
 				)
 				user_id = cur.lastrowid
+				if role == "admin":
+					auditlog.write(conn, None, "admin_account_created", details=f"username={username}")
 		except sqlite3.IntegrityError:
 			raise ValidationError("That username is already taken.") from None
 		return User(user_id, username, full_name, role)
@@ -92,6 +95,8 @@ class AuthService:
 		if ok:
 			with self.db.transaction() as conn:
 				conn.execute("UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?", (row["id"],))
+				if row["role"] == "admin":
+					auditlog.write(conn, row["id"], "admin_login")
 			return _row_to_user(row)
 		
 		with self.db.transaction() as conn:

@@ -6,6 +6,9 @@ import pandas as pd
 import streamlit as st
 
 from . import context
+from .. import auditlog
+from ..blockchain import utc_now_iso
+from ..exports import results_filename, results_to_csv
 from ..errors import AuthenticationError, VoteChainError
 
 DISCLAIMER = (
@@ -72,7 +75,10 @@ def vote_page() -> None:
 	if not open_elections:
 		st.info("There are no open elections right now.")
 		return
-	election = st.selectbox("Election", open_elections, format_func=lambda e: e.title, key="vote_election")
+	# Options are election ids, looked up fresh on every run, so the page never works from a stale object.
+	open_by_id = {x.id: x for x in open_elections}
+	election = open_by_id[st.selectbox("Election", list(open_by_id), format_func=lambda i: open_by_id[i].title,
+	                                   key="vote_election")]
 	if election.description:
 		st.write(election.description)
 	
@@ -122,8 +128,10 @@ def results_page() -> None:
 	if not elections:
 		st.info("No election has been opened yet.")
 		return
-	election = st.selectbox("Election", elections, format_func=lambda e: f"{e.title} ({e.status})",
-	                        key="results_election")
+	elections_by_id = {x.id: x for x in elections}
+	election = elections_by_id[st.selectbox(
+		"Election", list(elections_by_id), key="results_election",
+		format_func=lambda i: f"{elections_by_id[i].title} ({elections_by_id[i].status})")]
 	res = voting.compute_results(election.id)
 	
 	if not res.chain_valid:
@@ -146,11 +154,21 @@ def results_page() -> None:
 	st.bar_chart(df.set_index("Candidate")["Votes"])
 	st.dataframe(df.sort_values("Votes", ascending=False), hide_index=True)
 	if election.status == "closed":
-		if res.winners:
+		if res.nota_leads:
+			st.subheader("🚫 None of the above received the most votes")
+			st.caption("No candidate is declared elected.")
+		elif res.winners:
 			st.subheader("🏆 " + (res.winners[0].name if len(res.winners) == 1
-			                     else "Tie: " + ", ".join(w.name for w in res.winners)))
+								  else "Tie: " + ", ".join(w.name for w in res.winners)))
 		else:
 			st.subheader("No votes were cast.")
+
+	blocks = voting.get_blocks()
+	st.download_button(
+		"⬇️ Download results (CSV)",
+		data=results_to_csv(res, utc_now_iso(), len(blocks), blocks[-1].hash if blocks else None),
+		file_name=results_filename(election), mime="text/csv", key=f"download_results_{election.id}",
+	)
 	
 	with st.expander("Audit details"):
 		st.write(f"Participants recorded: **{res.participants}** · accepted on-chain: **{res.accepted_total}** · "
@@ -234,15 +252,16 @@ def admin_page() -> None:
 		st.stop()
 	context.show_flashes()
 	
-	tab_new, tab_manage, tab_mine = st.tabs(["Create election", "Manage election", "Mining"])
+	tab_new, tab_manage, tab_mine, tab_audit = st.tabs(["Create election", "Manage election", "Mining", "Audit log"])
 	
 	with tab_new:
 		with st.form("create_election", clear_on_submit=True):
 			title = st.text_input("Title")
 			description = st.text_area("Description")
+			allow_nota = st.checkbox("Include a “None of the above” (NOTA) option on the ballot", key="create_nota")
 			if st.form_submit_button("Create draft election", type="primary"):
 				try:
-					e = voting.create_election(user.id, title, description)
+					e = voting.create_election(user.id, title, description, allow_nota)
 				except VoteChainError as exc:
 					st.error(str(exc))
 				else:
@@ -254,17 +273,28 @@ def admin_page() -> None:
 		if not elections:
 			st.info("Create an election first.")
 		else:
-			e = st.selectbox("Election", elections, format_func=lambda x: f"{x.title} — {STATUS_ICON[x.status]}",
-			                 key="admin_election")
+			elections_by_id = {x.id: x for x in elections}
+			e = elections_by_id[st.selectbox(
+				"Election", list(elections_by_id), key="admin_election",
+				format_func=lambda i: f"{elections_by_id[i].title} — {STATUS_ICON[elections_by_id[i].status]}")]
 			candidates = voting.list_candidates(e.id)
 			eligible = voting.list_eligible(e.id)
 			
 			left, right = st.columns(2)
 			with left:
-				st.subheader(f"Candidates ({len(candidates)})")
+				st.subheader(f"Candidates ({sum(1 for c in candidates if not c.is_nota)})")
 				for c in candidates:
 					st.write(f"• **{c.name}**" + (f" — {c.description}" if c.description else ""))
 				if e.status == "draft":
+					nota_on = st.toggle("Include “None of the above” (NOTA) option", value=e.allow_nota,
+										key=f"nota_{e.id}")
+					if nota_on != e.allow_nota:
+						try:
+							voting.set_nota(user.id, e.id, nota_on)
+						except VoteChainError as exc:
+							st.error(str(exc))
+						else:
+							st.rerun()
 					with st.form(f"add_cand_{e.id}", clear_on_submit=True):
 						name = st.text_input("Candidate name")
 						desc = st.text_input("Short description (optional)")
@@ -275,8 +305,8 @@ def admin_page() -> None:
 								st.error(str(exc))
 							else:
 								st.rerun()
-					if candidates:
-						rm = st.selectbox("Remove candidate", candidates, format_func=lambda c: c.name,
+					if any(not c.is_nota for c in candidates):
+						rm = st.selectbox("Remove candidate", [c for c in candidates if not c.is_nota], format_func=lambda c: c.name,
 						                  index=None, key=f"rm_cand_{e.id}")
 						if rm and st.button("Remove selected candidate", key=f"rm_btn_{e.id}"):
 							try:
@@ -348,9 +378,36 @@ def admin_page() -> None:
 		         f"auto-mine: **{'on' if voting.auto_mine else 'off'}** · max txs/block: **{voting.max_txs}**")
 		if st.button("⛏️ Mine pending ballots", disabled=pending == 0):
 			try:
-				mined = voting.mine_pending()
+				mined = voting.mine_pending(actor_id=user.id)
 			except VoteChainError as exc:
 				st.error(str(exc))
 			else:
 				context.flash("success", f"Mined {len(mined)} block(s).")
 				st.rerun()
+
+	with tab_audit:
+		st.caption("Every administrative action is recorded here in the same transaction as the action itself. "
+				   "Entries are hash-linked, so editing or deleting one is detected. Votes are never logged.")
+		intact, problems = voting.verify_audit_log(user.id)
+		if intact:
+			st.success("✅ Audit log verified: every entry is correctly hash-linked to the one before it.")
+		else:
+			st.error("❌ Audit log verification FAILED: entries were altered or removed.")
+			for problem in problems:
+				st.write(f"- {problem}")
+		f1, f2 = st.columns(2)
+		action = f1.selectbox("Filter by action", ["All actions", *auditlog.ACTIONS], key="audit_action")
+		limit = f2.number_input("Entries to show (newest first)", min_value=10, max_value=1000, value=100,
+								step=10, key="audit_limit")
+		entries = voting.list_audit_log(user.id, int(limit), None if action == "All actions" else action)
+		titles = {x.id: x.title for x in voting.list_elections()}
+		if entries:
+			st.dataframe(pd.DataFrame([{
+				"Time (UTC)": x.timestamp,
+				"Admin": x.actor_username or "system",
+				"Action": x.action,
+				"Election": f"{titles.get(x.election_id, '?')} (#{x.election_id})" if x.election_id else "",
+				"Details": x.details,
+			} for x in entries]), hide_index=True)
+		else:
+			st.info("No entries match the filter.")

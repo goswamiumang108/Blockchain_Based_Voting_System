@@ -1,6 +1,5 @@
 """VoteChain: Streamlit entry point.   Run with:  streamlit run app.py"""
 import streamlit as st
-import sys
 
 st.set_page_config(page_title="VoteChain", page_icon="🗳️", layout="wide")
 
